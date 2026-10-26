@@ -53,7 +53,7 @@ jobs:
           cp dist/SonyCinema.apk kit/sony-cinema/SonyCinema.apk
           cp sony/cyt.sh kit/sony-cinema/cyt.sh
           cp sony/SONY-CINEMA-README.md kit/sony-cinema/README.md
-          cp themes/sony-cinema/config.json kit/sony-cinema/config.json
+          cp sony/config.json kit/sony-cinema/config.json
           # The user's original 95KB Cinema artwork, pinned to their own LG fork's known commit.
           curl --fail --location --retry 3 --max-time 90 \
             https://raw.githubusercontent.com/Cryptic-Tiger/cleanyourtv-webos/f005dd0/themes/cinema/cinema.jpg \
