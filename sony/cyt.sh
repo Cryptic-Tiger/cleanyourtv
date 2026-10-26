@@ -12,7 +12,20 @@ guard() {
   sdk=$(getprop ro.build.version.sdk)
   [ "$sdk" = 26 ] || die "Expected Android 8 / API 26, found $sdk."
 }
-backup_ready() { [ -f "$B/enabled.txt" ] || die "Run check first; no changes made."; }
+backup_ready() {
+  [ -s "$B/enabled.txt" ] || die "Enabled packages backup missing or empty; run check first."
+  [ -f "$B/disabled.txt" ] || die "Disabled packages backup missing (an empty file is OK)."
+  [ -s "$B/home.txt" ] && [ -s "$B/model.txt" ] && [ -s "$B/build.txt" ] \
+    || die "Original Home/model/build backup incomplete."
+  [ -f "$B/changed.txt" ] || die "Disabled-by-Cinema record is missing."
+  grep -Fqx 'package:com.google.android.tvlauncher' "$B/enabled.txt" \
+    || die "Stock Sony launcher absent from the enabled-package backup."
+  grep -q '^package:' "$B/enabled.txt" || die "Enabled-package backup has no package entries."
+  case "$(cat "$B/home.txt")" in
+    "$STOCK"/*) ;;
+    *) die "Original Home is not the expected stock launcher; refusing to proceed." ;;
+  esac
+}
 home() { cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null | tail -n 1; }
 check() {
   guard
@@ -58,6 +71,48 @@ finish_home() {
     }
   fi
   say "New Home selected. Stock Home is still installed for recovery."
+}
+# Android 8 on this Sony can return the stock Home even after set-home-activity says Success.
+# After verifying the replacement launches, disable stock Home temporarily, select Cinema,
+# check the resolved Home, and restore stock Home in the same command if selection fails.
+switch_home() {
+  guard
+  backup_ready
+  exists "$NEW" || die "Cinema APK is not installed."
+  enabled "$STOCK" || die "Stock Home is not enabled. Use restore instead."
+  before=$(home)
+  case "$before" in "$STOCK"/*) ;; *) die "Current Home is unexpected ($before); refusing to disable any launcher.";; esac
+  out=$(am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n "$NEW/.MainActivity" 2>&1)
+  echo "$out"
+  echo "$out" | grep -Fq 'Status: ok' || die "Cinema failed to start; Sony Home unchanged."
+  echo "$out" | grep -q '^Error' && die "Cinema reported a launch error; Sony Home unchanged."
+  say "Cinema opened. Switching Home with same-command rollback on failure."
+  result=$(pm disable-user --user 0 "$STOCK" 2>&1)
+  echo "$result"
+  case "$result" in
+    *disabled-user*|*'new state: disabled'*|*'new state: disabled-user'*) ;;
+    *) pm enable --user 0 "$STOCK" >/dev/null 2>&1
+       die "Android refused the Sony Home disable; restored original enabled state." ;;
+  esac
+  if ! cmd package set-home-activity --user 0 "$NEW/.MainActivity"; then
+    say "Home preference refused. Restoring Sony Home."
+    pm enable --user 0 "$STOCK" >/dev/null 2>&1
+    cmd package set-home-activity --user 0 "$STOCK/.MainActivity" >/dev/null 2>&1
+    die "Handover failed; Sony Home re-enabled."
+  fi
+  current=$(home)
+  case "$current" in
+    "$NEW"/*)
+      say "SUCCESS: Cinema is the resolved Home ($current)."
+      say "Press the physical Sony Home button. If it does not open Cinema, run: sh $BASE/cyt.sh restore"
+      ;;
+    *)
+      say "Home still resolves to $current; restoring Sony Home."
+      pm enable --user 0 "$STOCK" >/dev/null 2>&1
+      cmd package set-home-activity --user 0 "$STOCK/.MainActivity" >/dev/null 2>&1
+      die "Cinema handover failed. Stock Sony Home re-enabled; no reboot required."
+      ;;
+  esac
 }
 apply_theme() {
   backup_ready
@@ -105,10 +160,10 @@ restore() {
 }
 case "$1" in
   check) check ;;
-  home) case "$2" in try) try_home;; finish) finish_home;; *) die "Usage: home try|finish";; esac ;;
+  home) case "$2" in try) try_home;; finish) finish_home;; switch) switch_home;; *) die "Usage: home try|finish|switch";; esac ;;
   theme) apply_theme ;;
   debloat) debloat "$2" ;;
   restore) restore ;;
   status) say "Current Home: $(home)"; say "Cinema APK: $(exists "$NEW" && echo installed || echo missing)"; say "Stock Home: $(enabled "$STOCK" && echo enabled || echo disabled)";;
-  *) echo "Usage: sh cyt.sh check | home try | home finish | theme | debloat --confirmed-x850d | restore | status"; exit 2 ;;
+  *) echo "Usage: sh cyt.sh check | home try | home switch | theme | debloat --confirmed-x850d | restore | status"; exit 2 ;;
 esac
